@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0b1020" />
+<title>Neon Cube Runner — 3D Touch Game</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overscroll-behavior: none; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #0b1020; color: #eef2ff;
+    display: flex; flex-direction: column; min-height: 100dvh;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: max(10px, env(safe-area-inset-top)) 14px 8px;
+  }
+  h1 { font-size: 16px; margin: 0; letter-spacing: .04em; }
+  h1 span { color: #22d3ee; }
+  #hud { display: flex; gap: 12px; font-variant-numeric: tabular-nums; font-size: 14px; }
+  #hud b { color: #a5f3fc; }
+  #wrap { position: relative; flex: 1; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #overlay {
+    position: absolute; left: 12px; right: 12px; top: 10px;
+    display: flex; justify-content: center; pointer-events: none;
+  }
+  #pill {
+    background: rgba(8,12,28,.72); border: 1px solid rgba(34,211,238,.45);
+    border-radius: 999px; padding: 8px 14px; font-size: 13px; backdrop-filter: blur(6px);
+  }
+  #controls {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;
+    padding: 10px 14px calc(12px + env(safe-area-inset-bottom));
+  }
+  button {
+    appearance: none; border: 1px solid rgba(148,163,184,.35);
+    background: rgba(30,41,59,.85); color: #f8fafc;
+    border-radius: 16px; min-height: 56px; font-size: 18px; font-weight: 700;
+  }
+  button:active { transform: scale(.97); background: rgba(34,211,238,.35); }
+  #btnStart { border-color: #22d3ee; background: #0e7490; }
+  p.help { margin: 0; padding: 0 14px 10px; color: #94a3b8; font-size: 12px; text-align: center; }
+  @media (min-width: 760px) {
+    h1 { font-size: 20px; }
+    #controls { grid-template-columns: 160px 160px 160px; justify-content: center; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>NEON <span>CUBE</span> RUNNER</h1>
+  <div id="hud"><div>SCORE <b id="score">0</b></div><div>BEST <b id="best">0</b></div></div>
+</header>
+<div id="wrap">
+  <canvas id="game" aria-label="3D cube runner game"></canvas>
+  <div id="overlay"><div id="pill">◀ drag / tap sides to steer • tap START • dodge magenta cubes</div></div>
+</div>
+<div id="controls">
+  <button id="btnLeft" aria-label="move left">◀</button>
+  <button id="btnStart" aria-label="start game">▶ START</button>
+  <button id="btnRight" aria-label="move right">▶</button>
+</div>
+<p class="help">Phone + tablet ready • touch, mouse drag, or ← → keys • auto-demo plays until you tap.</p>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const pill = document.getElementById('pill');
+  let W = 0, H = 0, DPR = 1;
+  function resize() {
+    const r = canvas.parentElement.getBoundingClientRect();
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = Math.max(280, r.width); H = Math.max(280, r.height);
+    canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize); resize();
+
+  const state = {
+    running: true, // auto-demo on so screenshots always show action
+    t: 0, score: 0, best: Number(localStorage.getItem('ncr-best') || 0),
+    playerX: 0, targetX: 0, speed: 7.5, spawnT: 0, shake: 0,
+    obstacles: [], stars: [], particles: []
+  };
+  bestEl.textContent = state.best;
+  for (let i = 0; i < 90; i++) state.stars.push({ x: Math.random()*2-1, y: Math.random(), z: Math.random() });
+
+  function reset() { state.obstacles.length = 0; state.score = 0; state.playerX = 0; state.targetX = 0; state.speed = 7.5; }
+  function startGame() {
+    reset(); state.running = true;
+    document.getElementById('btnStart').textContent = '⏸ PAUSE';
+    pill.textContent = 'GO! Steer with ◀ ▶ — survive as long as you can';
+  }
+  function toggle() {
+    if (state.running && state.score > 5) {
+      state.running = false;
+      document.getElementById('btnStart').textContent = '▶ RESUME';
+    } else startGame();
+  }
+  document.getElementById('btnStart').addEventListener('click', toggle);
+  const left = document.getElementById('btnLeft'), right = document.getElementById('btnRight');
+  const hold = (el, dir) => {
+    const on = e => { e.preventDefault(); state.targetX = Math.max(-2.2, Math.min(2.2, state.targetX + dir * 1.1)); if (!state.running) startGame(); };
+    el.addEventListener('pointerdown', on);
+  };
+  hold(left, -1); hold(right, 1);
+  window.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft') state.targetX = Math.max(-2.2, state.targetX - 0.6);
+    if (e.key === 'ArrowRight') state.targetX = Math.min(2.2, state.targetX + 0.6);
+    if (e.key === ' ' || e.key === 'Enter') toggle();
+  });
+  let dragX = null;
+  canvas.addEventListener('pointerdown', e => { dragX = e.clientX; if (!state.running) startGame(); });
+  window.addEventListener('pointermove', e => {
+    if (dragX === null) return;
+    state.targetX = Math.max(-2.2, Math.min(2.2, state.targetX + (e.clientX - dragX) / 60));
+    dragX = e.clientX;
+  });
+  window.addEventListener('pointerup', () => dragX = null);
+  canvas.addEventListener('touchstart', e => {
+    const t = e.touches[0]; if (!t) return;
+    const r = canvas.getBoundingClientRect();
+    if (t.clientX < r.left + r.width / 2) state.targetX = Math.max(-2.2, state.targetX - 0.9);
+    else state.targetX = Math.min(2.2, state.targetX + 0.9);
+    if (!state.running) startGame();
+  }, { passive: true });
+
+  // perspective: world x in [-3,3], y in [0,2], z in [0,60] -> screen
+  // near (z=0) maps to bottom, far maps to horizon
+  function project(x, y, z) {
+    const fov = 6;
+    const s = fov / (fov + z);
+    const horizon = H * 0.38;
+    const bottom = H * 0.98;
+    const spread = Math.min(W, H) * 0.42;
+    return { x: W/2 + x * spread * s, y: horizon + (bottom - horizon) * s - y * spread * 0.55 * s, s };
+  }
+  function drawCube(sx, sy, size, c1, c2, c3) {
+    const h = size/2;
+    ctx.fillStyle = c1; ctx.fillRect(sx-h, sy-h, size, size);       // front
+    ctx.fillStyle = c2;                                             // top
+    ctx.beginPath(); ctx.moveTo(sx-h, sy-h); ctx.lineTo(sx-h+h*0.45, sy-h-h*0.45);
+    ctx.lineTo(sx+h+h*0.45, sy-h-h*0.45); ctx.lineTo(sx+h, sy-h); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = c3;                                             // side
+    ctx.beginPath(); ctx.moveTo(sx+h, sy-h); ctx.lineTo(sx+h+h*0.45, sy-h-h*0.45);
+    ctx.lineTo(sx+h+h*0.45, sy+h-h*0.45); ctx.lineTo(sx+h, sy+h); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1.5; ctx.strokeRect(sx-h, sy-h, size, size);
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    state.t += dt;
+    if (state.running) {
+      // gentle auto-steer for demo so capture always shows gameplay
+      const nearest = state.obstacles.filter(o => o.z < 14 && o.z > 1 && Math.abs(o.x - state.playerX) < 0.9).sort((a,b)=>a.z-b.z)[0];
+      if (nearest && Math.abs(state.targetX - state.playerX) < 0.2) {
+        state.targetX = Math.max(-2.2, Math.min(2.2, nearest.x > state.playerX ? state.playerX - 1.2 : state.playerX + 1.2));
+      }
+      state.playerX += (state.targetX - state.playerX) * Math.min(1, dt * 8);
+      state.speed = Math.min(16, state.speed + dt * 0.25);
+      state.spawnT -= dt;
+      if (state.spawnT <= 0) {
+        state.spawnT = Math.max(0.32, 0.85 - state.score * 0.004);
+        const lane = [-2, -1, 0, 1, 2][Math.floor(Math.random()*5)];
+        state.obstacles.push({ x: lane + (Math.random()*0.4-0.2), z: 55, size: 0.9 + Math.random()*0.5, spin: Math.random()*6 });
+        if (Math.random() < 0.5) state.obstacles.push({ x: [-2,-1,0,1,2][Math.floor(Math.random()*5)], z: 60, size: 0.8, spin: 1 });
+      }
+      for (const o of state.obstacles) { o.z -= state.speed * dt; o.spin += dt * 2; }
+      state.obstacles = state.obstacles.filter(o => o.z > -2);
+      state.score += dt * 10;
+      scoreEl.textContent = Math.floor(state.score);
+      // collision
+      for (const o of state.obstacles) {
+        if (o.z < 1.6 && o.z > 0.2 && Math.abs(o.x - state.playerX) < 0.75) {
+          state.shake = 1;
+          for (let i = 0; i < 26; i++) state.particles.push({ x: state.playerX, y: 0.6, z: 1, vx: (Math.random()-0.5)*6, vy: Math.random()*4, life: 1 });
+          state.best = Math.max(state.best, Math.floor(state.score));
+          localStorage.setItem('ncr-best', String(state.best)); bestEl.textContent = state.best;
+          pill.textContent = '💥 Crash! Score ' + Math.floor(state.score) + ' — tap START to retry (auto-restarting…)';
+          reset(); break;
+        }
+      }
+      if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 2.2);
+    }
+    for (const s of state.stars) { s.z -= dt * 0.25; if (s.z <= 0) { s.z = 1; s.x = Math.random()*2-1; s.y = Math.random(); } }
+    for (const p of state.particles) { p.x += p.vx*dt; p.y += p.vy*dt; p.vy -= 6*dt; p.life -= dt*1.4; }
+    state.particles = state.particles.filter(p => p.life > 0);
+
+    // --- render ---
+    const shx = state.shake * (Math.random()-0.5) * 14, shy = state.shake * (Math.random()-0.5) * 10;
+    ctx.save(); ctx.translate(shx, shy);
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#0b1020'); g.addColorStop(0.45, '#1e1b4b'); g.addColorStop(0.62, '#831843'); g.addColorStop(0.72, '#0b1020');
+    ctx.fillStyle = g; ctx.fillRect(-20, -20, W+40, H+40);
+    // stars
+    ctx.fillStyle = '#e2e8f0';
+    for (const s of state.stars) { const p = project(s.x*6, 2.2+s.y*3.2, s.z*30); ctx.globalAlpha = 0.9*(1-s.z); ctx.fillRect(p.x, p.y, 2, 2); }
+    ctx.globalAlpha = 1;
+    // sun
+    const sunR = Math.min(W,H)*0.11;
+    const sg = ctx.createRadialGradient(W/2, H*0.36, 4, W/2, H*0.36, sunR*2.2);
+    sg.addColorStop(0, '#fde68a'); sg.addColorStop(0.5, '#f472b6'); sg.addColorStop(1, 'rgba(244,114,182,0)');
+    ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(W/2, H*0.36, sunR*2.2, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fbbf24'; ctx.beginPath(); ctx.arc(W/2, H*0.36, sunR, 0, 7); ctx.fill();
+    ctx.fillStyle = '#0b1020';
+    for (let i = 0; i < 4; i++) ctx.fillRect(W/2-sunR-4, H*0.36 - sunR*0.2 + i*7, sunR*2+8, 3);
+    // road grid (perspective)
+    ctx.strokeStyle = 'rgba(34,211,238,.5)'; ctx.lineWidth = 1.5;
+    for (let i = -4; i <= 4; i++) {
+      const a = project(i*0.9, 0, 0), b = project(i*0.9, 0, 55);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+    for (let z = 0; z < 55; z += 4) {
+      const zz = ((z - state.t * state.speed) % 20 + 20) % 20;
+      const a = project(-3.4, 0, zz), b = project(3.4, 0, zz);
+      ctx.globalAlpha = 0.75 * (1 - zz/22);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    // obstacles sorted far->near
+    const sorted = [...state.obstacles].sort((a,b)=>b.z-a.z);
+    for (const o of sorted) {
+      const p = project(o.x, 0.55, o.z);
+      const size = Math.max(2, 64 * p.s * o.size);
+      ctx.fillStyle = 'rgba(0,0,0,.4)';
+      ctx.beginPath(); ctx.ellipse(p.x, p.y+size*0.55, size*0.55, size*0.16, 0, 0, 7); ctx.fill();
+      drawCube(p.x, p.y, size, '#e11d48', '#fb7185', '#881337');
+    }
+    // player
+    const pp = project(state.playerX, 0.55, 1.2);
+    const ps = 64 * pp.s;
+    ctx.fillStyle = 'rgba(34,211,238,.35)';
+    ctx.beginPath(); ctx.ellipse(pp.x, pp.y+ps*0.62, ps*0.7, ps*0.2, 0, 0, 7); ctx.fill();
+    drawCube(pp.x, pp.y, ps, '#22d3ee', '#a5f3fc', '#0e7490');
+    // particles
+    for (const p of state.particles) {
+      const q = project(p.x, p.y, 1.5);
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = '#fda4af'; ctx.fillRect(q.x, q.y, 5, 5);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  // expose readiness flag for capture
+  window.__gameReady = true;
+})();
+</script>
+</body>
+</html>
